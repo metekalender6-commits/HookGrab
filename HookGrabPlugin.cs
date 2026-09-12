@@ -16,7 +16,7 @@ namespace HookGrab;
 public class HookGrabPlugin : BasePlugin
 {
     public override string ModuleName => "Hook & Grab";
-    public override string ModuleVersion => "1.5.2";
+    public override string ModuleVersion => "1.5.3";
     public override string ModuleAuthor => "you";
     public override string ModuleDescription => "Hold Hook (CT / Root / Grant) & Hold Grab (Root / Grant)";
 
@@ -73,19 +73,44 @@ public class HookGrabPlugin : BasePlugin
     public void OnHookOn(CCSPlayerController? player, CommandInfo command)
     {
         if (player == null || !player.IsValid) return;
+
+        player.PrintToChat(" \x04[DEBUG]\x01 css_hook_on çağrıldı");
+
         if (!CanUseHook(player))
         {
-            player.PrintToChat(" \x02[Hook]\x01 Yetkin yok.");
+            player.PrintToChat(" \x02[Hook]\x01 Yetkin yok. (CT veya Root veya !hookver olmalısın)");
             return;
         }
 
+        player.PrintToChat(" \x04[DEBUG]\x01 Yetki tamam");
+
         var pawn = player.PlayerPawn.Value;
-        if (pawn == null || !pawn.IsValid || pawn.AbsOrigin == null) return;
-        if (pawn.LifeState != (byte)LifeState_t.LIFE_ALIVE) return;
-        if (_hooks.ContainsKey(player.Slot)) return;
+        if (pawn == null || !pawn.IsValid || pawn.AbsOrigin == null)
+        {
+            player.PrintToChat(" \x02[DEBUG]\x01 Pawn geçersiz");
+            return;
+        }
+
+        if (pawn.LifeState != (byte)LifeState_t.LIFE_ALIVE)
+        {
+            player.PrintToChat(" \x02[DEBUG]\x01 Canlı değilsin");
+            return;
+        }
+
+        if (_hooks.ContainsKey(player.Slot))
+        {
+            player.PrintToChat(" \x02[DEBUG]\x01 Zaten hook aktif");
+            return;
+        }
 
         var beam = CreateBeam(Color.FromArgb(255, 0, 200, 255));
-        _hooks[player.Slot] = new HookState { Beam = beam, StartTime = Server.CurrentTime };
+        _hooks[player.Slot] = new HookState
+        {
+            Beam = beam,
+            StartTime = Server.CurrentTime
+        };
+
+        player.PrintToChat(" \x04[Hook]\x01 Hook başladı!");
     }
 
     [ConsoleCommand("css_hook_off", "Hook bitir (tuş bırak)")]
@@ -98,6 +123,7 @@ public class HookGrabPlugin : BasePlugin
         {
             RemoveBeam(state.Beam);
             _hooks.Remove(player.Slot);
+            player.PrintToChat(" \x04[Hook]\x01 Hook kapandı.");
         }
     }
 
@@ -107,15 +133,16 @@ public class HookGrabPlugin : BasePlugin
     public void OnGrabOn(CCSPlayerController? player, CommandInfo command)
     {
         if (player == null || !player.IsValid) return;
+
         if (!CanUseGrab(player))
         {
             player.PrintToChat(" \x02[Grab]\x01 Yetkin yok.");
             return;
         }
 
-        // Artık burada bırakma yok. Sadece yeni grab başlatır.
+        // Zaten tutuyorsa tekrar basınca bir şey yapma
         if (_grabs.Any(kv => kv.Value.GrabberSlot == player.Slot))
-            return; // Zaten birini tutuyorsa tekrar basınca bir şey yapma
+            return;
 
         var target = GetLookedAtPlayer(player, _grabMaxDistance.Value);
         if (target == null)
@@ -261,7 +288,7 @@ public class HookGrabPlugin : BasePlugin
         player.PrintToChat(" \x04unbind q");
         player.PrintToChat(" \x04alias +hook \"css_hook_on\"");
         player.PrintToChat(" \x04alias -hook \"css_hook_off\"");
-        player.PrintToChat(" \x04bind q \"+hook\"");
+        player.PrintToChat(" \x04bind \"q\" \"+hook\"");
         player.PrintToChat(" ");
         player.PrintToChat(" \x01Q'ya \x04BASILI TUT\x01 = çalışır");
         player.PrintToChat(" \x01Q'yu \x04BIRAK\x01 = kapanır");
@@ -280,7 +307,7 @@ public class HookGrabPlugin : BasePlugin
         player.PrintToChat(" \x04unbind g");
         player.PrintToChat(" \x04alias +grab \"css_grab_on\"");
         player.PrintToChat(" \x04alias -grab \"css_grab_off\"");
-        player.PrintToChat(" \x04bind g \"+grab\"");
+        player.PrintToChat(" \x04bind \"g\" \"+grab\"");
         player.PrintToChat(" ");
         player.PrintToChat(" \x01G'ye \x04BASILI TUT\x01 = çalışır");
         player.PrintToChat(" \x01G'yi \x04BIRAK\x01 = kapanır");
