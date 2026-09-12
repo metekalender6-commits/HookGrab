@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <ImplicitUsings>disable</ImplicitUsings>   <!-- ÖNEMLİ: Numerics çakışmasını engeller -->
     <Nullable>enable</Nullable>
     <RootNamespace>HookGrab</RootNamespace>
     <AssemblyName>HookGrab</AssemblyName>
