@@ -4,13 +4,12 @@ using System.Drawing;
 using System.Linq;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Core.Attributes.Registration;   // ConsoleCommand burada
+using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Admin;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Cvars;
 using CounterStrikeSharp.API.Modules.Utils;
 
-// Vector çakışmasını tamamen bitir
 using Vector = CounterStrikeSharp.API.Modules.Utils.Vector;
 
 namespace HookGrab;
@@ -18,9 +17,9 @@ namespace HookGrab;
 public class HookGrabPlugin : BasePlugin
 {
     public override string ModuleName => "Hook & Grab";
-    public override string ModuleVersion => "1.1.0";
+    public override string ModuleVersion => "1.4.0";
     public override string ModuleAuthor => "you";
-    public override string ModuleDescription => "css_hook (@css/ban) ve css_grab (@css/root) + trail + hold";
+    public override string ModuleDescription => "Hold Hook (CT + @css/ban) & Hold Grab (@css/root)";
 
     private readonly FakeConVar<float> _hookSpeed = new("css_hook_speed", "Hook fırlatma hızı", 900f);
     private readonly FakeConVar<float> _hookUpBoost = new("css_hook_upboost", "Hook'ta yukarı ekstra itiş", 100f);
@@ -41,29 +40,24 @@ public class HookGrabPlugin : BasePlugin
 
     public override void Unload(bool hotReload)
     {
-        foreach (var h in _hooks.Values)
-            RemoveBeam(h.Beam);
-        foreach (var g in _grabs.Values)
-            RemoveBeam(g.Beam);
-
+        foreach (var h in _hooks.Values) RemoveBeam(h.Beam);
+        foreach (var g in _grabs.Values) RemoveBeam(g.Beam);
         _hooks.Clear();
         _grabs.Clear();
     }
 
-    // ---------------- HOOK ----------------
+    // ==================== HOOK (CT + @css/ban) ====================
 
-    [ConsoleCommand("css_hook", "Baktığın yöne hook atar (tekrar basınca biter)")]
+    [ConsoleCommand("css_hook_on", "Hook başlat (basılı tut)")]
     [RequiresPermissions("@css/ban")]
-    [CommandHelper(minArgs: 0, usage: "", whoCanExecute: CommandUsage.CLIENT_ONLY)]
-    public void OnHookCommand(CCSPlayerController? player, CommandInfo command)
+    [CommandHelper(minArgs: 0, whoCanExecute: CommandUsage.CLIENT_ONLY)]
+    public void OnHookOn(CCSPlayerController? player, CommandInfo command)
     {
         if (player == null || !player.IsValid) return;
 
-        if (_hooks.TryGetValue(player.Slot, out var existing))
+        if (player.Team != CsTeam.CounterTerrorist)
         {
-            RemoveBeam(existing.Beam);
-            _hooks.Remove(player.Slot);
-            player.PrintToChat(" \x04[Hook]\x01 Bıraktın.");
+            player.PrintToChat(" \x02[Hook]\x01 Sadece CT kullanabilir.");
             return;
         }
 
@@ -71,51 +65,46 @@ public class HookGrabPlugin : BasePlugin
         if (pawn == null || !pawn.IsValid || pawn.AbsOrigin == null) return;
         if (pawn.LifeState != (byte)LifeState_t.LIFE_ALIVE) return;
 
-        var beam = CreateBeam(Color.FromArgb(255, 0, 255, 255));
+        if (_hooks.ContainsKey(player.Slot)) return;
+
+        var beam = CreateBeam(Color.FromArgb(255, 0, 200, 255));
         _hooks[player.Slot] = new HookState
         {
             Beam = beam,
             StartTime = Server.CurrentTime
         };
-
-        player.PrintToChat($" \x04[Hook]\x01 Aktif! (hız: {_hookSpeed.Value:0}) Tekrar !hook = bırak.");
     }
 
-    [ConsoleCommand("css_hookspeed", "Hook hızını ayarlar")]
-    [RequiresPermissions("@css/ban")]
-    [CommandHelper(minArgs: 1, usage: "<hız>", whoCanExecute: CommandUsage.CLIENT_ONLY)]
-    public void OnHookSpeedCommand(CCSPlayerController? player, CommandInfo command)
-    {
-        if (player == null) return;
-
-        if (float.TryParse(command.GetArg(1), out float val) && val > 0)
-        {
-            _hookSpeed.Value = val;
-            player.PrintToChat($" \x04[Hook]\x01 Hook hızı {val:0} olarak ayarlandı.");
-        }
-        else
-        {
-            player.PrintToChat(" \x02[Hook]\x01 Geçersiz değer. Kullanım: css_hookspeed <sayı>");
-        }
-    }
-
-    // ---------------- GRAB ----------------
-
-    [ConsoleCommand("css_grab", "Baktığın oyuncuyu grablar / tekrar basınca bırakır")]
-    [RequiresPermissions("@css/root")]
-    [CommandHelper(minArgs: 0, usage: "", whoCanExecute: CommandUsage.CLIENT_ONLY)]
-    public void OnGrabCommand(CCSPlayerController? player, CommandInfo command)
+    [ConsoleCommand("css_hook_off", "Hook bitir (tuş bırak)")]
+    [CommandHelper(minArgs: 0, whoCanExecute: CommandUsage.CLIENT_ONLY)]
+    public void OnHookOff(CCSPlayerController? player, CommandInfo command)
     {
         if (player == null || !player.IsValid) return;
 
-        var existingEntry = _grabs.FirstOrDefault(kv => kv.Value.GrabberSlot == player.Slot);
-        if (existingEntry.Value != null)
+        if (_hooks.TryGetValue(player.Slot, out var state))
         {
-            RemoveBeam(existingEntry.Value.Beam);
-            _grabs.Remove(existingEntry.Key);
+            RemoveBeam(state.Beam);
+            _hooks.Remove(player.Slot);
+        }
+    }
 
-            var releasedPlayer = Utilities.GetPlayerFromSlot(existingEntry.Key);
-            releasedPlayer?.PrintToChat(" \x04[Grab]\x01 Bırakıldın.");
+    // ==================== GRAB (@css/root) ====================
+
+    [ConsoleCommand("css_grab_on", "Grab başlat (basılı tut)")]
+    [RequiresPermissions("@css/root")]
+    [CommandHelper(minArgs: 0, whoCanExecute: CommandUsage.CLIENT_ONLY)]
+    public void OnGrabOn(CCSPlayerController? player, CommandInfo command)
+    {
+        if (player == null || !player.IsValid) return;
+
+        // Zaten birini tutuyorsa tekrar basınca bırak
+        var existing = _grabs.FirstOrDefault(kv => kv.Value.GrabberSlot == player.Slot);
+        if (existing.Value != null)
+        {
+            RemoveBeam(existing.Value.Beam);
+            _grabs.Remove(existing.Key);
+            var released = Utilities.GetPlayerFromSlot(existing.Key);
+            released?.PrintToChat(" \x04[Grab]\x01 Bırakıldın.");
             player.PrintToChat(" \x04[Grab]\x01 Bıraktın.");
             return;
         }
@@ -129,7 +118,7 @@ public class HookGrabPlugin : BasePlugin
 
         if (_grabs.ContainsKey(target.Slot))
         {
-            player.PrintToChat(" \x02[Grab]\x01 Bu oyuncu zaten başka biri tarafından grablanmış.");
+            player.PrintToChat(" \x02[Grab]\x01 Bu oyuncu zaten grablanmış.");
             return;
         }
 
@@ -142,9 +131,72 @@ public class HookGrabPlugin : BasePlugin
             StartTime = Server.CurrentTime
         };
 
-        player.PrintToChat($" \x04[Grab]\x01 {target.PlayerName} grablandı. Space: uzaklaştır, Ctrl: yaklaştır. Tekrar !grab: bırak.");
+        player.PrintToChat($" \x04[Grab]\x01 {target.PlayerName} grablandı.");
         target.PrintToChat(" \x02[Grab]\x01 Grablandın!");
     }
+
+    [ConsoleCommand("css_grab_off", "Grab bitir (tuş bırak)")]
+    [CommandHelper(minArgs: 0, whoCanExecute: CommandUsage.CLIENT_ONLY)]
+    public void OnGrabOff(CCSPlayerController? player, CommandInfo command)
+    {
+        if (player == null || !player.IsValid) return;
+
+        var existing = _grabs.FirstOrDefault(kv => kv.Value.GrabberSlot == player.Slot);
+        if (existing.Value != null)
+        {
+            RemoveBeam(existing.Value.Beam);
+            _grabs.Remove(existing.Key);
+
+            var released = Utilities.GetPlayerFromSlot(existing.Key);
+            released?.PrintToChat(" \x04[Grab]\x01 Bırakıldın.");
+            player.PrintToChat(" \x04[Grab]\x01 Bıraktın.");
+        }
+    }
+
+    // ==================== KULLANIM KOMUTLARI ====================
+
+    [ConsoleCommand("css_hookkodu", "Hook kullanım kodunu gösterir")]
+    [CommandHelper(minArgs: 0, whoCanExecute: CommandUsage.CLIENT_ONLY)]
+    public void OnHookKodu(CCSPlayerController? player, CommandInfo command)
+    {
+        if (player == null) return;
+
+        player.PrintToChat(" \x04========== HOOK KULLANIM ==========");
+        player.PrintToChat(" \x01Konsola şunu yaz:");
+        player.PrintToChat(" \x04alias +hook \"css_hook_on\"");
+        player.PrintToChat(" \x04alias -hook \"css_hook_off\"");
+        player.PrintToChat(" \x04bind tuş \"+hook\"");
+        player.PrintToChat(" \x01Örnek: \x04bind f \"+hook\"");
+        player.PrintToChat(" \x01Sadece \x04CT\x01 + \x04@css/ban\x01 yetkisi olanlar kullanabilir.");
+        player.PrintToChat(" \x04===================================");
+    }
+
+    [ConsoleCommand("css_grabkodu", "Grab kullanım kodunu gösterir")]
+    [CommandHelper(minArgs: 0, whoCanExecute: CommandUsage.CLIENT_ONLY)]
+    public void OnGrabKodu(CCSPlayerController? player, CommandInfo command)
+    {
+        if (player == null) return;
+
+        player.PrintToChat(" \x04========== GRAB KULLANIM ==========");
+        player.PrintToChat(" \x01Konsola şunu yaz:");
+        player.PrintToChat(" \x04alias +grab \"css_grab_on\"");
+        player.PrintToChat(" \x04alias -grab \"css_grab_off\"");
+        player.PrintToChat(" \x04bind tuş \"+grab\"");
+        player.PrintToChat(" \x01Örnek: \x04bind g \"+grab\"");
+        player.PrintToChat(" \x01Sadece \x04@css/root\x01 yetkisi olanlar kullanabilir.");
+        player.PrintToChat(" \x04===================================");
+    }
+
+    // Eski isimler de çalışsın
+    [ConsoleCommand("css_hook", "Eski uyumluluk")]
+    [CommandHelper(minArgs: 0, whoCanExecute: CommandUsage.CLIENT_ONLY)]
+    public void OnHookOld(CCSPlayerController? player, CommandInfo command) => OnHookOn(player, command);
+
+    [ConsoleCommand("css_grab", "Eski uyumluluk")]
+    [CommandHelper(minArgs: 0, whoCanExecute: CommandUsage.CLIENT_ONLY)]
+    public void OnGrabOld(CCSPlayerController? player, CommandInfo command) => OnGrabOn(player, command);
+
+    // ==================== TICK ====================
 
     private void OnTick()
     {
@@ -157,17 +209,17 @@ public class HookGrabPlugin : BasePlugin
             var state = kvp.Value;
             var player = Utilities.GetPlayerFromSlot(slot);
 
-            if (!IsAliveAndValid(player))
+            if (!IsAliveAndValid(player) || player!.Team != CsTeam.CounterTerrorist)
             {
                 RemoveBeam(state.Beam);
                 _hooks.Remove(slot);
                 continue;
             }
 
-            var pawn = player!.PlayerPawn.Value!;
+            var pawn = player.PlayerPawn.Value!;
             var forward = AnglesToForward(pawn.EyeAngles);
-            float speed = _hookSpeed.Value;
 
+            float speed = _hookSpeed.Value;
             pawn.AbsVelocity.X = forward.X * speed;
             pawn.AbsVelocity.Y = forward.Y * speed;
             pawn.AbsVelocity.Z = forward.Z * speed + _hookUpBoost.Value;
@@ -179,13 +231,10 @@ public class HookGrabPlugin : BasePlugin
                 eyePos.Y + forward.Y * _trailLength.Value,
                 eyePos.Z + forward.Z * _trailLength.Value
             );
-
             UpdateBeam(state.Beam, eyePos, endPos, GetRainbowColor(now - state.StartTime));
         }
 
         // ---- GRAB ----
-        if (_grabs.Count == 0) return;
-
         foreach (var kvp in _grabs.ToList())
         {
             int targetSlot = kvp.Key;
@@ -224,12 +273,11 @@ public class HookGrabPlugin : BasePlugin
             targetPawn.Teleport(newPos, targetPawn.AbsRotation, new Vector(0, 0, 0));
 
             var beamStart = new Vector(eyePos.X, eyePos.Y, eyePos.Z + 64f);
-            var beamEnd = new Vector(newPos.X, newPos.Y, newPos.Z);
-            UpdateBeam(state.Beam, beamStart, beamEnd, GetRainbowColor(now - state.StartTime));
+            UpdateBeam(state.Beam, beamStart, newPos, GetRainbowColor(now - state.StartTime));
         }
     }
 
-    // ---------------- BEAM / TRAIL ----------------
+    // ==================== BEAM ====================
 
     private CBeam? CreateBeam(Color color)
     {
@@ -283,11 +331,10 @@ public class HookGrabPlugin : BasePlugin
             case 4: r = u; g = p; b = v; break;
             default: r = v; g = p; b = q; break;
         }
-
         return Color.FromArgb(255, (int)(r * 255), (int)(g * 255), (int)(b * 255));
     }
 
-    // ---------------- YARDIMCI ----------------
+    // ==================== YARDIMCI ====================
 
     private static bool IsAliveAndValid(CCSPlayerController? p)
     {
@@ -331,7 +378,6 @@ public class HookGrabPlugin : BasePlugin
                 best = p;
             }
         }
-
         return best;
     }
 
