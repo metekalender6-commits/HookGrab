@@ -1,0 +1,72 @@
+name: Build HookGrab Plugin
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:          # Actions sekmesinden manuel çalıştırma
+
+env:
+  PLUGIN_NAME: HookGrab
+  DOTNET_VERSION: "10.0.x"
+  PROJECT_FILE: HookGrab.csproj   # csproj adın farklıysa burayı değiştir
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # Release oluşturmak için gerekli
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore ${{ env.PROJECT_FILE }}
+
+      - name: Build (Release)
+        run: |
+          dotnet build ${{ env.PROJECT_FILE }} \
+            -c Release \
+            --no-restore \
+            -o ./publish
+
+      - name: Prepare plugin folder
+        run: |
+          mkdir -p release/addons/counterstrikesharp/plugins/${{ env.PLUGIN_NAME }}
+          # DLL + gerekli dosyaları kopyala
+          cp -r ./publish/* release/addons/counterstrikesharp/plugins/${{ env.PLUGIN_NAME }}/
+          # Gereksiz dosyaları temizle (opsiyonel)
+          find release -name "*.pdb" -delete || true
+          find release -name "*.deps.json" -delete || true
+          find release -name "*.runtimeconfig.json" -delete || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PLUGIN_NAME }}-dll
+          path: release/
+          retention-days: 14
+
+      # --- Opsiyonel: Tag ile otomatik Release ---
+      - name: Create Zip
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cd release
+          zip -r ../${{ env.PLUGIN_NAME }}-${{ github.ref_name }}.zip .
+          cd ..
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.PLUGIN_NAME }}-${{ github.ref_name }}.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
