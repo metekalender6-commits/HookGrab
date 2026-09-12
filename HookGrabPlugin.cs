@@ -9,7 +9,6 @@ using CounterStrikeSharp.API.Modules.Admin;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Cvars;
 using CounterStrikeSharp.API.Modules.Utils;
-
 using Vector = CounterStrikeSharp.API.Modules.Utils.Vector;
 
 namespace HookGrab;
@@ -17,9 +16,9 @@ namespace HookGrab;
 public class HookGrabPlugin : BasePlugin
 {
     public override string ModuleName => "Hook & Grab";
-    public override string ModuleVersion => "1.4.0";
+    public override string ModuleVersion => "1.5.0";
     public override string ModuleAuthor => "you";
-    public override string ModuleDescription => "Hold Hook (CT + @css/ban) & Hold Grab (@css/root)";
+    public override string ModuleDescription => "Hold Hook (CT / Root / Grant) & Hold Grab (Root / Grant)";
 
     private readonly FakeConVar<float> _hookSpeed = new("css_hook_speed", "Hook fırlatma hızı", 900f);
     private readonly FakeConVar<float> _hookUpBoost = new("css_hook_upboost", "Hook'ta yukarı ekstra itiş", 100f);
@@ -33,6 +32,10 @@ public class HookGrabPlugin : BasePlugin
     private readonly Dictionary<int, HookState> _hooks = new();
     private readonly Dictionary<int, GrabState> _grabs = new();
 
+    // Geçici yetkiler (SteamID)
+    private readonly HashSet<ulong> _hookGranted = new();
+    private readonly HashSet<ulong> _grabGranted = new();
+
     public override void Load(bool hotReload)
     {
         RegisterListener<Listeners.OnTick>(OnTick);
@@ -44,20 +47,38 @@ public class HookGrabPlugin : BasePlugin
         foreach (var g in _grabs.Values) RemoveBeam(g.Beam);
         _hooks.Clear();
         _grabs.Clear();
+        _hookGranted.Clear();
+        _grabGranted.Clear();
     }
 
-    // ==================== HOOK (CT + @css/ban) ====================
+    // ==================== YETKİ KONTROL ====================
+    private bool CanUseHook(CCSPlayerController player)
+    {
+        if (player == null || !player.IsValid) return false;
+        if (AdminManager.PlayerHasPermissions(player, "@css/root")) return true;
+        if (player.Team == CsTeam.CounterTerrorist) return true;
+        if (player.SteamID != 0 && _hookGranted.Contains(player.SteamID)) return true;
+        return false;
+    }
 
+    private bool CanUseGrab(CCSPlayerController player)
+    {
+        if (player == null || !player.IsValid) return false;
+        if (AdminManager.PlayerHasPermissions(player, "@css/root")) return true;
+        if (player.SteamID != 0 && _grabGranted.Contains(player.SteamID)) return true;
+        return false;
+    }
+
+    // ==================== HOOK ====================
     [ConsoleCommand("css_hook_on", "Hook başlat (basılı tut)")]
-    [RequiresPermissions("@css/ban")]
     [CommandHelper(minArgs: 0, whoCanExecute: CommandUsage.CLIENT_ONLY)]
     public void OnHookOn(CCSPlayerController? player, CommandInfo command)
     {
         if (player == null || !player.IsValid) return;
 
-        if (player.Team != CsTeam.CounterTerrorist)
+        if (!CanUseHook(player))
         {
-            player.PrintToChat(" \x02[Hook]\x01 Sadece CT kullanabilir.");
+            player.PrintToChat(" \x02[Hook]\x01 Bu komutu kullanma yetkin yok.");
             return;
         }
 
@@ -65,7 +86,7 @@ public class HookGrabPlugin : BasePlugin
         if (pawn == null || !pawn.IsValid || pawn.AbsOrigin == null) return;
         if (pawn.LifeState != (byte)LifeState_t.LIFE_ALIVE) return;
 
-        if (_hooks.ContainsKey(player.Slot)) return;
+        if (_hooks.ContainsKey(player.Slot)) return; // Zaten aktifse tekrar açma
 
         var beam = CreateBeam(Color.FromArgb(255, 0, 200, 255));
         _hooks[player.Slot] = new HookState
@@ -88,21 +109,26 @@ public class HookGrabPlugin : BasePlugin
         }
     }
 
-    // ==================== GRAB (@css/root) ====================
-
+    // ==================== GRAB ====================
     [ConsoleCommand("css_grab_on", "Grab başlat (basılı tut)")]
-    [RequiresPermissions("@css/root")]
     [CommandHelper(minArgs: 0, whoCanExecute: CommandUsage.CLIENT_ONLY)]
     public void OnGrabOn(CCSPlayerController? player, CommandInfo command)
     {
         if (player == null || !player.IsValid) return;
 
-        // Zaten birini tutuyorsa tekrar basınca bırak
+        if (!CanUseGrab(player))
+        {
+            player.PrintToChat(" \x02[Grab]\x01 Bu komutu kullanma yetkin yok.");
+            return;
+        }
+
+        // Zaten birini tutuyorsa bırak
         var existing = _grabs.FirstOrDefault(kv => kv.Value.GrabberSlot == player.Slot);
         if (existing.Value != null)
         {
             RemoveBeam(existing.Value.Beam);
             _grabs.Remove(existing.Key);
+
             var released = Utilities.GetPlayerFromSlot(existing.Key);
             released?.PrintToChat(" \x04[Grab]\x01 Bırakıldın.");
             player.PrintToChat(" \x04[Grab]\x01 Bıraktın.");
@@ -153,21 +179,149 @@ public class HookGrabPlugin : BasePlugin
         }
     }
 
-    // ==================== KULLANIM KOMUTLARI ====================
+    // ==================== YETKİ VERME / ALMA ====================
+    [ConsoleCommand("css_hookver", "Bir oyuncuya geçici Hook yetkisi ver")]
+    [RequiresPermissions("@css/root")]
+    [CommandHelper(minArgs: 1, usage: "<isim>", whoCanExecute: CommandUsage.CLIENT_ONLY)]
+    public void OnHookVer(CCSPlayerController? player, CommandInfo command)
+    {
+        if (player == null || !player.IsValid) return;
 
+        var target = FindPlayerByName(command.GetArg(1));
+        if (target == null)
+        {
+            player.PrintToChat(" \x02[Hook]\x01 Oyuncu bulunamadı.");
+            return;
+        }
+
+        if (target.SteamID == 0)
+        {
+            player.PrintToChat(" \x02[Hook]\x01 Bu oyuncunun SteamID'si okunamadı.");
+            return;
+        }
+
+        if (_hookGranted.Contains(target.SteamID))
+        {
+            player.PrintToChat($" \x02[Hook]\x01 {target.PlayerName} zaten Hook yetkisine sahip.");
+            return;
+        }
+
+        _hookGranted.Add(target.SteamID);
+        player.PrintToChat($" \x04[Hook]\x01 {target.PlayerName} adlı oyuncuya Hook yetkisi verildi.");
+        target.PrintToChat($" \x04[Hook]\x01 {player.PlayerName} sana Hook yetkisi verdi! (basılı tutarak kullan)");
+    }
+
+    [ConsoleCommand("css_grabver", "Bir oyuncuya geçici Grab yetkisi ver")]
+    [RequiresPermissions("@css/root")]
+    [CommandHelper(minArgs: 1, usage: "<isim>", whoCanExecute: CommandUsage.CLIENT_ONLY)]
+    public void OnGrabVer(CCSPlayerController? player, CommandInfo command)
+    {
+        if (player == null || !player.IsValid) return;
+
+        var target = FindPlayerByName(command.GetArg(1));
+        if (target == null)
+        {
+            player.PrintToChat(" \x02[Grab]\x01 Oyuncu bulunamadı.");
+            return;
+        }
+
+        if (target.SteamID == 0)
+        {
+            player.PrintToChat(" \x02[Grab]\x01 Bu oyuncunun SteamID'si okunamadı.");
+            return;
+        }
+
+        if (_grabGranted.Contains(target.SteamID))
+        {
+            player.PrintToChat($" \x02[Grab]\x01 {target.PlayerName} zaten Grab yetkisine sahip.");
+            return;
+        }
+
+        _grabGranted.Add(target.SteamID);
+        player.PrintToChat($" \x04[Grab]\x01 {target.PlayerName} adlı oyuncuya Grab yetkisi verildi.");
+        target.PrintToChat($" \x04[Grab]\x01 {player.PlayerName} sana Grab yetkisi verdi! (basılı tutarak kullan)");
+    }
+
+    [ConsoleCommand("css_hookal", "Bir oyuncunun Hook yetkisini al")]
+    [RequiresPermissions("@css/root")]
+    [CommandHelper(minArgs: 1, usage: "<isim>", whoCanExecute: CommandUsage.CLIENT_ONLY)]
+    public void OnHookAl(CCSPlayerController? player, CommandInfo command)
+    {
+        if (player == null || !player.IsValid) return;
+
+        var target = FindPlayerByName(command.GetArg(1));
+        if (target == null)
+        {
+            player.PrintToChat(" \x02[Hook]\x01 Oyuncu bulunamadı.");
+            return;
+        }
+
+        if (target.SteamID == 0 || !_hookGranted.Contains(target.SteamID))
+        {
+            player.PrintToChat($" \x02[Hook]\x01 {target.PlayerName} Hook yetkisine sahip değil.");
+            return;
+        }
+
+        _hookGranted.Remove(target.SteamID);
+
+        // Aktif hook varsa kapat
+        if (_hooks.ContainsKey(target.Slot))
+        {
+            RemoveBeam(_hooks[target.Slot].Beam);
+            _hooks.Remove(target.Slot);
+        }
+
+        player.PrintToChat($" \x04[Hook]\x01 {target.PlayerName} adlı oyuncunun Hook yetkisi alındı.");
+        target.PrintToChat($" \x02[Hook]\x01 Hook yetkin alındı.");
+    }
+
+    [ConsoleCommand("css_grabal", "Bir oyuncunun Grab yetkisini al")]
+    [RequiresPermissions("@css/root")]
+    [CommandHelper(minArgs: 1, usage: "<isim>", whoCanExecute: CommandUsage.CLIENT_ONLY)]
+    public void OnGrabAl(CCSPlayerController? player, CommandInfo command)
+    {
+        if (player == null || !player.IsValid) return;
+
+        var target = FindPlayerByName(command.GetArg(1));
+        if (target == null)
+        {
+            player.PrintToChat(" \x02[Grab]\x01 Oyuncu bulunamadı.");
+            return;
+        }
+
+        if (target.SteamID == 0 || !_grabGranted.Contains(target.SteamID))
+        {
+            player.PrintToChat($" \x02[Grab]\x01 {target.PlayerName} Grab yetkisine sahip değil.");
+            return;
+        }
+
+        _grabGranted.Remove(target.SteamID);
+
+        // Aktif grab varsa kapat
+        var existing = _grabs.FirstOrDefault(kv => kv.Value.GrabberSlot == target.Slot);
+        if (existing.Value != null)
+        {
+            RemoveBeam(existing.Value.Beam);
+            _grabs.Remove(existing.Key);
+        }
+
+        player.PrintToChat($" \x04[Grab]\x01 {target.PlayerName} adlı oyuncunun Grab yetkisi alındı.");
+        target.PrintToChat($" \x02[Grab]\x01 Grab yetkin alındı.");
+    }
+
+    // ==================== KULLANIM BİLGİSİ ====================
     [ConsoleCommand("css_hookkodu", "Hook kullanım kodunu gösterir")]
     [CommandHelper(minArgs: 0, whoCanExecute: CommandUsage.CLIENT_ONLY)]
     public void OnHookKodu(CCSPlayerController? player, CommandInfo command)
     {
         if (player == null) return;
-
         player.PrintToChat(" \x04========== HOOK KULLANIM ==========");
         player.PrintToChat(" \x01Konsola şunu yaz:");
         player.PrintToChat(" \x04alias +hook \"css_hook_on\"");
         player.PrintToChat(" \x04alias -hook \"css_hook_off\"");
         player.PrintToChat(" \x04bind tuş \"+hook\"");
-        player.PrintToChat(" \x01Örnek: \x04bind f \"+hook\"");
-        player.PrintToChat(" \x01Sadece \x04CT\x01 + \x04@css/ban\x01 yetkisi olanlar kullanabilir.");
+        player.PrintToChat(" \x01Örnek: \x04bind q \"+hook\"");
+        player.PrintToChat(" \x01CT / Root / Hook yetkisi olanlar kullanabilir.");
         player.PrintToChat(" \x04===================================");
     }
 
@@ -176,18 +330,17 @@ public class HookGrabPlugin : BasePlugin
     public void OnGrabKodu(CCSPlayerController? player, CommandInfo command)
     {
         if (player == null) return;
-
         player.PrintToChat(" \x04========== GRAB KULLANIM ==========");
         player.PrintToChat(" \x01Konsola şunu yaz:");
         player.PrintToChat(" \x04alias +grab \"css_grab_on\"");
         player.PrintToChat(" \x04alias -grab \"css_grab_off\"");
         player.PrintToChat(" \x04bind tuş \"+grab\"");
         player.PrintToChat(" \x01Örnek: \x04bind g \"+grab\"");
-        player.PrintToChat(" \x01Sadece \x04@css/root\x01 yetkisi olanlar kullanabilir.");
+        player.PrintToChat(" \x01Sadece Root veya Grab yetkisi olanlar kullanabilir.");
         player.PrintToChat(" \x04===================================");
     }
 
-    // Eski isimler de çalışsın
+    // Eski isimler (uyumluluk)
     [ConsoleCommand("css_hook", "Eski uyumluluk")]
     [CommandHelper(minArgs: 0, whoCanExecute: CommandUsage.CLIENT_ONLY)]
     public void OnHookOld(CCSPlayerController? player, CommandInfo command) => OnHookOn(player, command);
@@ -197,7 +350,6 @@ public class HookGrabPlugin : BasePlugin
     public void OnGrabOld(CCSPlayerController? player, CommandInfo command) => OnGrabOn(player, command);
 
     // ==================== TICK ====================
-
     private void OnTick()
     {
         float now = Server.CurrentTime;
@@ -207,22 +359,23 @@ public class HookGrabPlugin : BasePlugin
         {
             int slot = kvp.Key;
             var state = kvp.Value;
-            var player = Utilities.GetPlayerFromSlot(slot);
 
-            if (!IsAliveAndValid(player) || player!.Team != CsTeam.CounterTerrorist)
+            var player = Utilities.GetPlayerFromSlot(slot);
+            if (!IsAliveAndValid(player) || !CanUseHook(player!))
             {
                 RemoveBeam(state.Beam);
                 _hooks.Remove(slot);
                 continue;
             }
 
-            var pawn = player.PlayerPawn.Value!;
+            var pawn = player!.PlayerPawn.Value!;
             var forward = AnglesToForward(pawn.EyeAngles);
 
             float speed = _hookSpeed.Value;
             pawn.AbsVelocity.X = forward.X * speed;
             pawn.AbsVelocity.Y = forward.Y * speed;
             pawn.AbsVelocity.Z = forward.Z * speed + _hookUpBoost.Value;
+
             Utilities.SetStateChanged(pawn, "CBaseEntity", "m_vecAbsVelocity");
 
             var eyePos = new Vector(pawn.AbsOrigin!.X, pawn.AbsOrigin.Y, pawn.AbsOrigin.Z + 64f);
@@ -231,6 +384,7 @@ public class HookGrabPlugin : BasePlugin
                 eyePos.Y + forward.Y * _trailLength.Value,
                 eyePos.Z + forward.Z * _trailLength.Value
             );
+
             UpdateBeam(state.Beam, eyePos, endPos, GetRainbowColor(now - state.StartTime));
         }
 
@@ -243,7 +397,7 @@ public class HookGrabPlugin : BasePlugin
             var grabber = Utilities.GetPlayerFromSlot(state.GrabberSlot);
             var target = Utilities.GetPlayerFromSlot(targetSlot);
 
-            if (!IsAliveAndValid(grabber) || !IsAliveAndValid(target))
+            if (!IsAliveAndValid(grabber) || !IsAliveAndValid(target) || !CanUseGrab(grabber!))
             {
                 RemoveBeam(state.Beam);
                 _grabs.Remove(targetSlot);
@@ -278,7 +432,6 @@ public class HookGrabPlugin : BasePlugin
     }
 
     // ==================== BEAM ====================
-
     private CBeam? CreateBeam(Color color)
     {
         var beam = Utilities.CreateEntityByName<CBeam>("env_beam");
@@ -315,6 +468,7 @@ public class HookGrabPlugin : BasePlugin
     {
         float h = (t * 0.6f) % 1f;
         float s = 1f, v = 1f;
+
         int i = (int)(h * 6);
         float f = h * 6 - i;
         float p = v * (1 - s);
@@ -331,17 +485,17 @@ public class HookGrabPlugin : BasePlugin
             case 4: r = u; g = p; b = v; break;
             default: r = v; g = p; b = q; break;
         }
+
         return Color.FromArgb(255, (int)(r * 255), (int)(g * 255), (int)(b * 255));
     }
 
     // ==================== YARDIMCI ====================
-
     private static bool IsAliveAndValid(CCSPlayerController? p)
     {
-        return p != null && p.IsValid
-            && p.PlayerPawn.Value != null && p.PlayerPawn.Value.IsValid
-            && p.PlayerPawn.Value.AbsOrigin != null
-            && p.PlayerPawn.Value.LifeState == (byte)LifeState_t.LIFE_ALIVE;
+        return p != null && p.IsValid &&
+               p.PlayerPawn.Value != null && p.PlayerPawn.Value.IsValid &&
+               p.PlayerPawn.Value.AbsOrigin != null &&
+               p.PlayerPawn.Value.LifeState == (byte)LifeState_t.LIFE_ALIVE;
     }
 
     private CCSPlayerController? GetLookedAtPlayer(CCSPlayerController looker, float maxDistance)
@@ -378,6 +532,7 @@ public class HookGrabPlugin : BasePlugin
                 best = p;
             }
         }
+
         return best;
     }
 
@@ -392,6 +547,23 @@ public class HookGrabPlugin : BasePlugin
         float sy = MathF.Sin(yaw);
 
         return new Vector(cp * cy, cp * sy, -sp);
+    }
+
+    private CCSPlayerController? FindPlayerByName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+
+        name = name.ToLowerInvariant();
+        var players = Utilities.GetPlayers()
+            .Where(p => p.IsValid && p.PlayerName != null)
+            .ToList();
+
+        // Tam eşleşme
+        var exact = players.FirstOrDefault(p => p.PlayerName.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (exact != null) return exact;
+
+        // Kısmi eşleşme
+        return players.FirstOrDefault(p => p.PlayerName.ToLowerInvariant().Contains(name));
     }
 
     private class HookState
