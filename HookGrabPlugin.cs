@@ -1,14 +1,17 @@
-using CounterStrikeSharp.API;
-using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Modules.Admin;
-using CounterStrikeSharp.API.Modules.Commands;
-using CounterStrikeSharp.API.Modules.Cvars;
-using CounterStrikeSharp.API.Modules.Utils;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
-using System.Numerics;
+using CounterStrikeSharp.API;
+using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Core.Attributes.Registration;   // ConsoleCommand burada
+using CounterStrikeSharp.API.Modules.Admin;
+using CounterStrikeSharp.API.Modules.Commands;
+using CounterStrikeSharp.API.Modules.Cvars;
+using CounterStrikeSharp.API.Modules.Utils;
+
+// Vector çakışmasını tamamen bitir
+using Vector = CounterStrikeSharp.API.Modules.Utils.Vector;
 
 namespace HookGrab;
 
@@ -28,7 +31,6 @@ public class HookGrabPlugin : BasePlugin
     private readonly FakeConVar<float> _trailLength = new("css_hook_trail_length", "Hook trail uzunluğu", 800f);
     private readonly FakeConVar<float> _beamWidth = new("css_hook_beam_width", "Beam kalınlığı", 2.5f);
 
-    // slot -> state
     private readonly Dictionary<int, HookState> _hooks = new();
     private readonly Dictionary<int, GrabState> _grabs = new();
 
@@ -43,20 +45,20 @@ public class HookGrabPlugin : BasePlugin
             RemoveBeam(h.Beam);
         foreach (var g in _grabs.Values)
             RemoveBeam(g.Beam);
+
         _hooks.Clear();
         _grabs.Clear();
     }
 
-    // ---------------- HOOK (hold + trail) ----------------
+    // ---------------- HOOK ----------------
 
-    [ConsoleCommand("css_hook", "Baktığın yöne hook atar (tekrar basınca / tuş bırakınca biter)")]
+    [ConsoleCommand("css_hook", "Baktığın yöne hook atar (tekrar basınca biter)")]
     [RequiresPermissions("@css/ban")]
     [CommandHelper(minArgs: 0, usage: "", whoCanExecute: CommandUsage.CLIENT_ONLY)]
     public void OnHookCommand(CCSPlayerController? player, CommandInfo command)
     {
         if (player == null || !player.IsValid) return;
 
-        // Zaten aktifse bırak
         if (_hooks.TryGetValue(player.Slot, out var existing))
         {
             RemoveBeam(existing.Beam);
@@ -69,14 +71,14 @@ public class HookGrabPlugin : BasePlugin
         if (pawn == null || !pawn.IsValid || pawn.AbsOrigin == null) return;
         if (pawn.LifeState != (byte)LifeState_t.LIFE_ALIVE) return;
 
-        var beam = CreateBeam(Color.FromArgb(255, 0, 255, 255)); // başlangıç rengi
+        var beam = CreateBeam(Color.FromArgb(255, 0, 255, 255));
         _hooks[player.Slot] = new HookState
         {
             Beam = beam,
             StartTime = Server.CurrentTime
         };
 
-        player.PrintToChat($" \x04[Hook]\x01 Aktif! (hız: {_hookSpeed.Value:0}) Tekrar !hook = bırak. Trail gittiğin yöne çiziliyor.");
+        player.PrintToChat($" \x04[Hook]\x01 Aktif! (hız: {_hookSpeed.Value:0}) Tekrar !hook = bırak.");
     }
 
     [ConsoleCommand("css_hookspeed", "Hook hızını ayarlar")]
@@ -111,6 +113,7 @@ public class HookGrabPlugin : BasePlugin
         {
             RemoveBeam(existingEntry.Value.Beam);
             _grabs.Remove(existingEntry.Key);
+
             var releasedPlayer = Utilities.GetPlayerFromSlot(existingEntry.Key);
             releasedPlayer?.PrintToChat(" \x04[Grab]\x01 Bırakıldın.");
             player.PrintToChat(" \x04[Grab]\x01 Bıraktın.");
@@ -165,13 +168,11 @@ public class HookGrabPlugin : BasePlugin
             var forward = AnglesToForward(pawn.EyeAngles);
             float speed = _hookSpeed.Value;
 
-            // Sürekli velocity (hold etkisi)
             pawn.AbsVelocity.X = forward.X * speed;
             pawn.AbsVelocity.Y = forward.Y * speed;
             pawn.AbsVelocity.Z = forward.Z * speed + _hookUpBoost.Value;
             Utilities.SetStateChanged(pawn, "CBaseEntity", "m_vecAbsVelocity");
 
-            // Trail: göz hizasından bakış yönüne doğru
             var eyePos = new Vector(pawn.AbsOrigin!.X, pawn.AbsOrigin.Y, pawn.AbsOrigin.Z + 64f);
             var endPos = new Vector(
                 eyePos.X + forward.X * _trailLength.Value,
@@ -222,7 +223,6 @@ public class HookGrabPlugin : BasePlugin
 
             targetPawn.Teleport(newPos, targetPawn.AbsRotation, new Vector(0, 0, 0));
 
-            // Grab beam: grabber gözü → target
             var beamStart = new Vector(eyePos.X, eyePos.Y, eyePos.Z + 64f);
             var beamEnd = new Vector(newPos.X, newPos.Y, newPos.Z);
             UpdateBeam(state.Beam, beamStart, beamEnd, GetRainbowColor(now - state.StartTime));
@@ -252,6 +252,7 @@ public class HookGrabPlugin : BasePlugin
         beam.EndPos.X = end.X;
         beam.EndPos.Y = end.Y;
         beam.EndPos.Z = end.Z;
+
         Utilities.SetStateChanged(beam, "CBeam", "m_vecEndPos");
         Utilities.SetStateChanged(beam, "CBaseModelEntity", "m_clrRender");
     }
@@ -264,8 +265,7 @@ public class HookGrabPlugin : BasePlugin
 
     private static Color GetRainbowColor(float t)
     {
-        // Basit HSV → RGB döngüsü (renk değiştiren trail)
-        float h = (t * 0.6f) % 1f; // hız ayarı
+        float h = (t * 0.6f) % 1f;
         float s = 1f, v = 1f;
         int i = (int)(h * 6);
         float f = h * 6 - i;
@@ -283,6 +283,7 @@ public class HookGrabPlugin : BasePlugin
             case 4: r = u; g = p; b = v; break;
             default: r = v; g = p; b = q; break;
         }
+
         return Color.FromArgb(255, (int)(r * 255), (int)(g * 255), (int)(b * 255));
     }
 
@@ -330,6 +331,7 @@ public class HookGrabPlugin : BasePlugin
                 best = p;
             }
         }
+
         return best;
     }
 
